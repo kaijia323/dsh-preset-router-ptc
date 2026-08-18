@@ -17,8 +17,11 @@
 #     request carries ONLY the RL training sentence + shell/str_replace_editor
 #     and the model works in think-act feedback loops. After the first durable
 #     tool/call the session is promoted to the PTC/run_code (Code Mode)
-#     presentation instead of the full Standard catalog, and the router stops
-#     touching anything else. The mode derives from durable session events, so
+#     presentation instead of the full Standard catalog. The system prompt
+#     keeps the first-turn RL persona and appends only the Code Mode sections
+#     (`tools:code-only` + `tools:sdk`) — NOT the full sections — so the
+#     reasoning voice stays the standard one ("Let's/We need"), not the
+#     preview-style "Let me". The mode derives from durable session events, so
 #     resume/reload keeps it.
 #   - weak band: every real user message gets ONE fixed near-field guidance
 #     message appended right after it (cache-neutral), depth-adaptive:
@@ -62,7 +65,9 @@
 # Task-aware reasoning-mode router: classifies the first user message and
 # injects the matching persona + first-turn core tool set; after the first
 # durable tool/call, promotes the session to the PTC/run_code (Code Mode)
-# presentation instead of the full native Standard catalog.
+# presentation instead of the full native Standard catalog, keeping the RL
+# persona and only appending the Code Mode sections (`tools:code-only` +
+# `tools:sdk`).
 #
 # routerMode (v0.2.0 naming):
 #   standard (default) — RL interface restoration: the first request carries

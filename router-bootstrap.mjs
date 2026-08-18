@@ -150,17 +150,27 @@ export function apply(ctx, config) {
       core = new Set(legacyCore(mode))
     }
 
-    // Already promoted: keep the full assembled prompt sections (including the
-    // generated SDK and code-only guidance) instead of the minimal RL sections.
+    // Keep the first-turn RL sections after promotion. Restoring the FULL
+    // assembled sections here re-adds the built-in "AI agent powered by
+    // DeepSeek Harness" persona, which switches DeepSeek's reasoning voice to
+    // the preview-style "Let me..." instead of the standard "Let's/We need".
+    // Code Mode only needs its own two sections on top of the persona:
+    // `tools:code-only` (only run_code may be called) and `tools:sdk`
+    // (the generated SDK declarations).
+    const codeSections = (assembled.sections || []).filter(
+      (section) => section.name === 'tools:code-only' || section.name === 'tools:sdk',
+    )
+
+    // Already promoted: RL persona + Code Mode sections, nothing else.
     if (codeModeAgents.has(agent)) {
-      return { ...assembled, contexts: [] }
+      return { ...assembled, sections: [...sections, ...codeSections], contexts: [] }
     }
 
     if (session.events.some((event) => event.type === 'tool/call')) {
       if (routerMode === 'standard' && promoteTo === 'ptc') {
         promoteToPtc(agent, session)
         if (codeModeAgents.has(agent)) {
-          return { ...assembled, contexts: [] }
+          return { ...assembled, sections: [...sections, ...codeSections], contexts: [] }
         }
       }
       return { ...assembled, sections, contexts: [] } // promoted: PTC/run_code (standard) / full catalog (spec)
