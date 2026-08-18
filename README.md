@@ -6,9 +6,9 @@ DeepSeek Harness（DSH）Agent Preset：任务感知思维模式路由 → PTC/r
 
 ## 特性
 
-- **首轮与 router-standard 一致 + 协作式推理口吻**：首条真实用户消息分类为 `spec` / `react`，模糊文本进入 `weak` 由模型自行决定；首轮 system 为 RL 训练句 + `shell` / `str_replace_editor`，并额外锚定推理口吻为协作式（`Let's ...` / `We need ...`），避免 DeepSeek 在 runcode 场景下的预览版口吻（`Let me ...`）。
+- **首轮与 router-standard 一致 + 协作式推理口吻**：首条真实用户消息分类为 `spec` / `react`，模糊文本进入 `weak` 由模型自行决定；首轮 system 为 RL 训练句 + `shell` / `str_replace_editor`，并以强约束锚定推理口吻为协作式（只用 `Let's ...` / `We need ...`，禁止 `Let me` / `I need`），避免 DeepSeek 在 runcode 场景下的预览版口吻。
 - **首轮后切换 PTC/run_code**：第一个持久 `tool/call` 之后调用 `agent.ctx.tools.presentAs('code')`，模型工具面收敛为 Code Mode 生成的 `run_code` 单一入口，而不是开放完整 Standard 原生工具集。
-- **切换后保留首轮 persona + 协作口吻**：只在该 persona 之上追加 Code Mode 必需的 `tools:code-only`（仅 `run_code` 可直调）与 `tools:sdk`（生成的 SDK 声明）两段；不恢复完整 sections。协作口吻指令随 `router-voice` 段保留到切换之后。
+- **切换后 system 保持短 prompt**：`presentAs('code')` 生成的 `tools:code-only` + `tools:sdk`（约 33K）不再放进 `system`，而是在首个工具调用后作为一次性 durable inbox 消息注入对话；后续每轮 system 只保留 `router-persona` + `router-voice` 两段，因此 DeepSeek 的思维口吻与 router-standard 一致（`Let's` / `We need`，而不是预览版口吻 `Let me`）。
 - **按 agent 隔离**：切换状态记录在 `WeakSet`（agent 粒度），只影响已触发首个工具调用的会话，不影响同 preset 下其他会话。
 - **会话恢复安全**：模式从 durable session events 推导；已产生过 `tool/call` 的 resume / reload 会话会在下一条用户消息或下次 assembly 时自动补切到 PTC/run_code。
 - **Agent 自优化工具**：内置 `dev_router_status` / `dev_router_mode` / `dev_mode_subagent`，会话可读取和调整自身路由。
@@ -45,7 +45,7 @@ git clone --depth 1 https://github.com/kaijia323/dsh-preset-router-ptc.git ~/.ds
 新会话选择本 preset 后：
 
 - 第一轮仍是 RL 接口（`shell` + `str_replace_editor`）。
-- 模型做出第一个持久工具调用后，自动切换到 PTC/run_code：后续请求只看到 Code Mode 的 `run_code` 入口；system 保持首轮 RL persona，仅追加 Code Mode 的 code-only 指导与 SDK 两段。
+- 模型做出第一个持久工具调用后，自动切换到 PTC/run_code：后续请求只看到 Code Mode 的 `run_code` 入口；system 保持首轮的短 prompt（persona + 协作口吻），Code Mode SDK 已作为一条 durable 消息注入对话，不再进入 system。
 
 可通过内置工具查看当前状态：
 
@@ -78,7 +78,7 @@ config:
 | --- | --- | --- |
 | 首轮 | RL 接口：shell + str_replace_editor | 相同 |
 | 首个 `tool/call` 后 | 开放完整 Standard 原生工具集 | `agent.ctx.tools.presentAs('code')`，切换为 `run_code` 单一入口 |
-| prompt sections | 保持首轮 RL persona | 保持首轮 RL persona + `router-voice` 协作口吻段 + 仅追加 `tools:code-only` / `tools:sdk` 两段 |
+| prompt sections | 保持首轮 RL persona | system 保持 `router-persona` + `router-voice`；`tools:code-only` / `tools:sdk` 作为一次性 inbox 消息注入 |
 | 路由 / 弱带引导 / dev_* 工具 | 有 | 相同（另加 `router-voice` 口吻锚定） |
 
 ## 致谢

@@ -69,6 +69,8 @@ export function apply(ctx, config) {
   const agents = new Map() // session id -> Agent (live handle, in-process only)
   const firstUserText = new Map() // session id -> first REAL user message text (issue #3 fix)
   const codeModeAgents = new WeakSet() // agent -> already switched to PTC/run_code presentation
+  const sdkInjectedSessions = new Set() // session id -> Code Mode SDK message already durable
+  const sdkPendingSessions = new Set() // session id -> SDK message append queued, not yet durable
 
   // ── 路由模式（v0.2.0 命名，用户定义）───────────────────────────────────────
   // standard（默认，新）: RL 接口还原——首轮只有 RL 训练句 + shell/str_replace_editor，
@@ -86,13 +88,84 @@ export function apply(ctx, config) {
   // preview-style voice). Keep the standard router persona but anchor the
   // reasoning voice to the collaborative style the standard preset exhibits
   // ("Let's ..." / "We need ...").
-  const PTC_VOICE = 'You are working as part of a collaborative engineering team. In your step-by-step reasoning, use inclusive planning language — prefer "Let\'s ..." and "We need ..."; avoid first-person singular "Let me ...".'
+  const PTC_VOICE = 'You are working as part of a collaborative engineering team. In your reasoning, always use inclusive plural planning language ("Let\'s ...", "We need ..."). Never write the phrase "Let me" or the phrase "I need" anywhere in your reasoning; use "We need ..." or "Let\'s ..." instead.'
 
   /** spec 路由模式的首轮工具面（旧行为；weak 也走 default 面）。 */
   function legacyCore(mode) {
     switch (bandOf(mode)) {
       case 'spec': return ['read', 'edit', 'glob', 'grep']
       default: return ['read', 'write', 'edit']
+    }
+  }
+
+  /** Render one registered prompt section for an agent. */
+  function renderSectionText(section, agent) {
+    if (section === undefined) return ''
+    const text = typeof section.text === 'function' ? section.text({ scope: agent, agent }) : section.text
+    return typeof text === 'string' ? text : ''
+  }
+
+  /** Stable identity of the Code Mode SDK message for one session. */
+  function sdkMessageId(session) {
+    return `ptc-sdk-${session.id}`
+  }
+
+  /** Whether the Code Mode SDK message is already durable (pending in the
+   *  inbox or consumed into the message history), so resume/HMR never adds it
+   *  twice and the system prompt can stay short on later assemblies. */
+  function sdkInConversation(session) {
+    if (sdkInjectedSessions.has(session.id)) return true
+    const id = sdkMessageId(session)
+    const found = (session.events || []).some((event) => {
+      if (event.type === 'user/message' && event.data?.id === id) return true
+      if (event.type !== 'agent/inbox/spliced') return false
+      return (event.data?.inserted || []).some((message) => message.id === id)
+    })
+    if (found) sdkInjectedSessions.add(session.id)
+    return found
+  }
+
+  /**
+   * Move the generated Code Mode instructions OUT of the system prompt and
+   * into a durable inbox message. `presentAs('code')` would otherwise keep a
+   * ~33K `tools:sdk` section in `system` for every request; that long system
+   * is what flips DeepSeek's reasoning voice to the preview-style "Let me...".
+   * As a user message, the SDK is delivered once and the system prompt stays
+   * the short router persona + voice, like the standard preset.
+   */
+  function injectSdkMessage(agent, session) {
+    if (sdkInConversation(session) || sdkPendingSessions.has(session.id) || agent.inbox === undefined) return
+    try {
+      const tools = agent.ctx?.tools
+      if (tools === undefined) return
+      const codeOnly = renderSectionText(tools.collapseSection?.(), agent)
+      const sdk = renderSectionText(tools.sdkSection?.(), agent)
+      const body = [codeOnly, sdk].filter(Boolean).join('\n\n')
+      if (!body.trim()) return
+      const message = {
+        id: sdkMessageId(session),
+        role: 'user',
+        source: { kind: 'plugin', plugin: name },
+        content: [{ type: 'text', text: `<system-reminder>\nCode Mode instructions for this session:\n\n${body}\n</system-reminder>` }],
+      }
+      // `session/event` handlers run while the triggering session event is
+      // still being published; `inbox.append` would reenter session append.
+      // Queue the append as a microtask so it lands after publication but
+      // before the agent loop claims the next-step inbox.
+      sdkPendingSessions.add(session.id)
+      queueMicrotask(() => {
+        try {
+          if (sdkInConversation(session)) return
+          agent.inbox.append('next-step', message)
+          sdkInjectedSessions.add(session.id)
+        } catch (error) {
+          ctx.logger?.warn?.(`${name}: could not inject PTC/run_code SDK message for session ${session.id}`, error)
+        } finally {
+          sdkPendingSessions.delete(session.id)
+        }
+      })
+    } catch (error) {
+      ctx.logger?.warn?.(`${name}: could not render PTC/run_code SDK message for session ${session.id}`, error)
     }
   }
 
@@ -114,10 +187,12 @@ export function apply(ctx, config) {
       // Treat that as success rather than retrying forever.
       if (/conflicts with|already declared|one composition selects one presentation/i.test(message)) {
         codeModeAgents.add(agent)
+      } else {
+        ctx.logger?.warn?.(`${name}: could not switch session ${session.id} to PTC/run_code presentation`, error)
         return
       }
-      ctx.logger?.warn?.(`${name}: could not switch session ${session.id} to PTC/run_code presentation`, error)
     }
+    injectSdkMessage(agent, session)
   }
 
   ctx.on('system-prompt/assemble', async (_assembly, context, next) => {
@@ -159,19 +234,25 @@ export function apply(ctx, config) {
       core = new Set(legacyCore(mode))
     }
 
-    // Keep the first-turn RL sections after promotion. Restoring the FULL
-    // assembled sections here re-adds the built-in "AI agent powered by
-    // DeepSeek Harness" persona, which switches DeepSeek's reasoning voice to
-    // the preview-style "Let me..." instead of the standard "Let's/We need".
-    // Code Mode only needs its own two sections on top of the persona:
-    // `tools:code-only` (only run_code may be called) and `tools:sdk`
-    // (the generated SDK declarations).
+    // After promotion the system prompt keeps the SAME short shape as the
+    // first turn (router persona + voice). The generated `tools:code-only`
+    // and `tools:sdk` sections stay registered by `presentAs('code')`, but
+    // their ~33K text is delivered once as a durable inbox message instead of
+    // being rendered into `system` every request — that long system was the
+    // thing flipping DeepSeek to the preview-style "Let me..." reasoning.
     const codeSections = (assembled.sections || []).filter(
       (section) => section.name === 'tools:code-only' || section.name === 'tools:sdk',
     )
 
-    // Already promoted: RL persona + Code Mode sections, nothing else.
     if (codeModeAgents.has(agent)) {
+      // Normal path: the SDK message was injected on the first tool/call,
+      // before this assembly, so the system prompt stays short.
+      if (sdkInConversation(session)) {
+        return { ...assembled, sections, contexts: [] }
+      }
+      // Rare fallback (e.g. promotion happened during this same assembly):
+      // keep the SDK in the system for this one request; the injected inbox
+      // message takes over from the next request.
       return { ...assembled, sections: [...sections, ...codeSections], contexts: [] }
     }
 
@@ -179,7 +260,9 @@ export function apply(ctx, config) {
       if (routerMode === 'standard' && promoteTo === 'ptc') {
         promoteToPtc(agent, session)
         if (codeModeAgents.has(agent)) {
-          return { ...assembled, sections: [...sections, ...codeSections], contexts: [] }
+          return sdkInConversation(session)
+            ? { ...assembled, sections, contexts: [] }
+            : { ...assembled, sections: [...sections, ...codeSections], contexts: [] }
         }
       }
       return { ...assembled, sections, contexts: [] } // promoted: PTC/run_code (standard) / full catalog (spec)
