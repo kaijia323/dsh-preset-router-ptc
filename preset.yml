@@ -1,0 +1,2 @@
+name: PTC RunCode（首轮路由 → Code Mode）
+description: dsh-preset-router-standard 的 PTC 分支：首条用户消息分类 spec（计划优先）/ weak（模型内路由）/ react（执行者）并注入匹配 persona 与首轮核心工具面（RL 接口：shell + str_replace_editor）；首个持久工具调用后切换到 DSH 内置 PTC/run_code（Code Mode）单一入口（run_code SDK），不再开放完整 Standard 工具集；weak 带深度自适应近场引导；内置 dev_router_status / dev_router_mode / dev_mode_subagent 自我优化。
