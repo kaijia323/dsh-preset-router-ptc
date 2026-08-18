@@ -51,11 +51,17 @@
 # ── identity ────────────────────────────────────────────────────────────────
 
 # The router plugin replaces `sections` and clears `contexts` on the first
-# assembly, so this row is the fallback persona only (never `complete`).
+# assembly, so this row is the fallback persona only (never `complete`). The
+# extra sentence anchors the reasoning voice to the collaborative style
+# ("Let's ..." / "We need ...") instead of the preview-style "Let me ...".
 - id: persona
   name: '@deepseek-ai/dsh-persona'
   config:
-    text: You are a helpful software engineer assistant.
+    text: >-
+      You are a helpful software engineer assistant. You are working as part of
+      a collaborative engineering team. In your step-by-step reasoning, use
+      inclusive planning language — prefer "Let's ..." and "We need ..."; avoid
+      first-person singular "Let me ...".
 
 - id: agent-instructions
   name: '@deepseek-ai/dsh-agent-instructions'

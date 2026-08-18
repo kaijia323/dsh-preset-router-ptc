@@ -6,9 +6,9 @@ DeepSeek Harness（DSH）Agent Preset：任务感知思维模式路由 → PTC/r
 
 ## 特性
 
-- **首轮与 router-standard 一致**：首条真实用户消息分类为 `spec` / `react`，模糊文本进入 `weak` 由模型自行决定；首轮 system 仅保留 RL 训练句 + `shell` / `str_replace_editor`，模型以 think-act 反馈循环工作。
+- **首轮与 router-standard 一致 + 协作式推理口吻**：首条真实用户消息分类为 `spec` / `react`，模糊文本进入 `weak` 由模型自行决定；首轮 system 为 RL 训练句 + `shell` / `str_replace_editor`，并额外锚定推理口吻为协作式（`Let's ...` / `We need ...`），避免 DeepSeek 在 runcode 场景下的预览版口吻（`Let me ...`）。
 - **首轮后切换 PTC/run_code**：第一个持久 `tool/call` 之后调用 `agent.ctx.tools.presentAs('code')`，模型工具面收敛为 Code Mode 生成的 `run_code` 单一入口，而不是开放完整 Standard 原生工具集。
-- **切换后保留首轮 RL persona**：只在该 persona 之上追加 Code Mode 必需的 `tools:code-only`（仅 `run_code` 可直调）与 `tools:sdk`（生成的 SDK 声明）两段；不恢复完整 sections，因此 DeepSeek 的思维口吻与 router-standard 一致（`Let's` / `We need`，而不是预览版口吻 `Let me`）。
+- **切换后保留首轮 persona + 协作口吻**：只在该 persona 之上追加 Code Mode 必需的 `tools:code-only`（仅 `run_code` 可直调）与 `tools:sdk`（生成的 SDK 声明）两段；不恢复完整 sections。协作口吻指令随 `router-voice` 段保留到切换之后。
 - **按 agent 隔离**：切换状态记录在 `WeakSet`（agent 粒度），只影响已触发首个工具调用的会话，不影响同 preset 下其他会话。
 - **会话恢复安全**：模式从 durable session events 推导；已产生过 `tool/call` 的 resume / reload 会话会在下一条用户消息或下次 assembly 时自动补切到 PTC/run_code。
 - **Agent 自优化工具**：内置 `dev_router_status` / `dev_router_mode` / `dev_mode_subagent`，会话可读取和调整自身路由。
@@ -78,8 +78,8 @@ config:
 | --- | --- | --- |
 | 首轮 | RL 接口：shell + str_replace_editor | 相同 |
 | 首个 `tool/call` 后 | 开放完整 Standard 原生工具集 | `agent.ctx.tools.presentAs('code')`，切换为 `run_code` 单一入口 |
-| prompt sections | 保持首轮 RL persona | 保持首轮 RL persona + 仅追加 `tools:code-only` / `tools:sdk` 两段 |
-| 路由 / 弱带引导 / dev_* 工具 | 有 | 相同 |
+| prompt sections | 保持首轮 RL persona | 保持首轮 RL persona + `router-voice` 协作口吻段 + 仅追加 `tools:code-only` / `tools:sdk` 两段 |
+| 路由 / 弱带引导 / dev_* 工具 | 有 | 相同（另加 `router-voice` 口吻锚定） |
 
 ## 致谢
 

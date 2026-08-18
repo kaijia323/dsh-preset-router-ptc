@@ -81,6 +81,12 @@ export function apply(ctx, config) {
   // full native Standard catalog.
   const promoteTo = config.promoteTo === 'standard' ? 'standard' : 'ptc'
   const RL_PERSONA = 'You are a helpful software engineer assistant.'
+  // PTC/run_code sessions reason about writing a program, which DeepSeek
+  // otherwise tends to open with first-person singular "Let me ..." (the
+  // preview-style voice). Keep the standard router persona but anchor the
+  // reasoning voice to the collaborative style the standard preset exhibits
+  // ("Let's ..." / "We need ...").
+  const PTC_VOICE = 'You are working as part of a collaborative engineering team. In your step-by-step reasoning, use inclusive planning language — prefer "Let\'s ..." and "We need ..."; avoid first-person singular "Let me ...".'
 
   /** spec 路由模式的首轮工具面（旧行为；weak 也走 default 面）。 */
   function legacyCore(mode) {
@@ -143,6 +149,9 @@ export function apply(ctx, config) {
       sections = planSection
         ? [planSection, { name: 'router-persona', text: persona, order: 0 }]
         : [{ name: 'router-persona', text: persona, order: 0 }]
+      if (promoteTo === 'ptc') {
+        sections = [...sections, { name: 'router-voice', text: PTC_VOICE, order: 1 }]
+      }
       core = new Set(['str_replace_editor']) // RL shape: shell + editor
     } else {
       persona = personaFor(mode, modelId)
