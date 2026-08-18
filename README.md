@@ -4,6 +4,18 @@ DeepSeek Harness（DSH）Agent Preset：任务感知思维模式路由 → PTC/r
 
 本 preset 是 [dsh-preset-router-standard](https://github.com/kaijia323/dsh-preset-router-standard) 的 PTC 分支：保留其 router-standard 路由思路（首条真实用户消息在 `spec` / `weak` / `react` 行为带之间路由，首轮注入匹配 persona 与 RL 接口工具面），并把首个持久工具调用后的“开放完整 Standard 工具集”改为切换到 DSH 内置 **PTC/run_code（Code Mode）** 单一入口。
 
+## 两种 preset 模式
+
+本 preset 与 [dsh-preset-router-standard](https://github.com/kaijia323/dsh-preset-router-standard) 是同一套任务感知路由思路的两种 DSH preset 模式：
+
+| 模式 | 仓库 | 首个工具调用后的工具面 |
+| --- | --- | --- |
+| **Router Standard** | [dsh-preset-router-standard](https://github.com/kaijia323/dsh-preset-router-standard) | 开放完整 Standard 原生工具集 |
+| **PTC RunCode（本 preset）** | [dsh-preset-router-ptc](https://github.com/kaijia323/dsh-preset-router-ptc) | 切换到 DSH 内置 PTC/run_code（Code Mode）单一入口 |
+
+- **Router Standard**：任务感知路由 + RL 接口还原；首个持久工具调用后开放完整 Standard 工具集。
+- **PTC RunCode**：继承 Router Standard 的首轮路由与 RL 接口，首个持久工具调用后改为 `agent.ctx.tools.presentAs('code')` 切换为 PTC/run_code（Code Mode）单一入口，system 保持短 prompt（persona + 协作口吻）。
+
 ## 特性
 
 - **首轮与 router-standard 一致 + 协作式推理口吻**：首条真实用户消息分类为 `spec` / `react`，模糊文本进入 `weak` 由模型自行决定；首轮 system 为 RL 训练句 + `shell` / `str_replace_editor`，并以强约束锚定推理口吻为协作式（只用 `Let's ...` / `We need ...`，禁止 `Let me` / `I need`），避免 DeepSeek 在 runcode 场景下的预览版口吻。
