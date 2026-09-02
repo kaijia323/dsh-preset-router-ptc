@@ -30,7 +30,7 @@
  */
 
 import {
-  applyPersona, bandFor, bandOf, classifyTask, coreFor, parseMode, personaFor, sessionMode, testinessFor, clamp01,
+  applyPersona, bandFor, bandOf, classifyTask, coreFor, parseMode, personaFor, sessionEvents, sessionMode, testinessFor, clamp01,
   isComplexTask,
 } from './router-core.mjs'
 
@@ -116,7 +116,7 @@ export function apply(ctx, config) {
   function sdkInConversation(session) {
     if (sdkInjectedSessions.has(session.id)) return true
     const id = sdkMessageId(session)
-    const found = (session.events || []).some((event) => {
+    const found = sessionEvents(session).some((event) => {
       if (event.type === 'user/message' && event.data?.id === id) return true
       if (event.type !== 'agent/inbox/spliced') return false
       return (event.data?.inserted || []).some((message) => message.id === id)
@@ -256,7 +256,7 @@ export function apply(ctx, config) {
       return { ...assembled, sections: [...sections, ...codeSections], contexts: [] }
     }
 
-    if (session.events.some((event) => event.type === 'tool/call')) {
+    if (sessionEvents(session).some((event) => event.type === 'tool/call')) {
       if (routerMode === 'standard' && promoteTo === 'ptc') {
         promoteToPtc(agent, session)
         if (codeModeAgents.has(agent)) {
@@ -319,7 +319,7 @@ export function apply(ctx, config) {
     if (target === undefined || target.inbox === undefined) return
     // On a resumed/continued session that already passed the first tool/call,
     // make sure the PTC/run_code presentation is active before the next assembly.
-    if (routerMode === 'standard' && promoteTo === 'ptc' && session.events.some((event) => event.type === 'tool/call')) {
+    if (routerMode === 'standard' && promoteTo === 'ptc' && sessionEvents(session).some((event) => event.type === 'tool/call')) {
       promoteToPtc(target, session)
     }
     const mode = liveMode(overrides, firstUserText, session)

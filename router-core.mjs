@@ -147,9 +147,19 @@ export function classifyTask(text) {
   return 'weak'
 }
 
+/** Durable event log for one session (resume-safe derivation).
+ *  DSH 0.1.2-alpha.5 replaced the `session.events` getter with
+ *  `snapshotEvents()`; read whichever accessor the running DSH provides
+ *  so this preset works on alpha.2 and alpha.5 alike (on alpha.5 the old
+ *  accessor is undefined, so `events.find(...)` crashed). */
+export function sessionEvents(session) {
+  if (typeof session?.snapshotEvents === 'function') return session.snapshotEvents()
+  return session?.events ?? []
+}
+
 /** Per-session mode derived from durable events (resume-safe). */
 export function sessionMode(session) {
-  const events = session.events
+  const events = sessionEvents(session)
   const userMsg = events.find((e) => e.type === 'user/message')
   return classifyTask(extractText(userMsg?.data))
 }
