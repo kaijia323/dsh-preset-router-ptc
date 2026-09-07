@@ -19,7 +19,7 @@
 #     tool/call the session is promoted to the PTC/run_code (Code Mode)
 #     presentation instead of the full Standard catalog. The system prompt
 #     keeps the first-turn RL persona and appends only the Code Mode sections
-#     (`tools:code-only` + `tools:sdk`) — NOT the full sections — so the
+#     (`tools:ptc-only` + `tools:sdk`) — NOT the full sections — so the
 #     reasoning voice stays the standard one ("Let's/We need"), not the
 #     preview-style "Let me". The mode derives from durable session events, so
 #     resume/reload keeps it.
@@ -73,7 +73,7 @@
 # injects the matching persona + first-turn core tool set; after the first
 # durable tool/call, promotes the session to the PTC/run_code (Code Mode)
 # presentation instead of the full native Standard catalog, keeping the RL
-# persona and only appending the Code Mode sections (`tools:code-only` +
+# persona and only appending the Code Mode sections (`tools:ptc-only` +
 # `tools:sdk`).
 #
 # routerMode (v0.2.0 naming):

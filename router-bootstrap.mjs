@@ -30,7 +30,7 @@
  */
 
 import {
-  applyPersona, bandFor, bandOf, classifyTask, coreFor, parseMode, personaFor, sessionEvents, sessionMode, testinessFor, clamp01,
+  applyPersona, bandFor, bandOf, classifyTask, coreFor, extractText, parseMode, personaFor, sessionEvents, sessionMode, testinessFor, clamp01,
   isComplexTask,
 } from './router-core.mjs'
 
@@ -127,7 +127,7 @@ export function apply(ctx, config) {
 
   /**
    * Move the generated Code Mode instructions OUT of the system prompt and
-   * into a durable inbox message. `presentAs('code')` would otherwise keep a
+   * into a durable inbox message. `presentAs('ptc')` would otherwise keep a
    * ~33K `tools:sdk` section in `system` for every request; that long system
    * is what flips DeepSeek's reasoning voice to the preview-style "Let me...".
    * As a user message, the SDK is delivered once and the system prompt stays
@@ -170,15 +170,17 @@ export function apply(ctx, config) {
   }
 
   /**
-   * Promote one agent to PTC/run_code presentation (the `code` preset's
-   * tool-presentation mode) after its first durable tool/call. The switch is
-   * per agent: it uses `agent.ctx` so only this session's model-facing tool
-   * list collapses to the generated SDK's `run_code` entry point.
+   * Promote one agent to PTC/run_code presentation (`presentAs('ptc')`) after
+   * its first durable tool/call. DSH ToolPresentationMode is native|ptc|both;
+   * `'code'` is not a mode and would leave the native catalog in place while
+   * still registering `tools:sdk`. The switch is per agent: it uses
+   * `agent.ctx` so only this session's model-facing tool list collapses to
+   * the generated SDK's `run_code` entry point.
    */
   function promoteToPtc(agent, session) {
     if (codeModeAgents.has(agent)) return
     try {
-      agent.ctx.tools.presentAs('code')
+      agent.ctx.tools.presentAs('ptc')
       codeModeAgents.add(agent)
     } catch (error) {
       const message = error && error.message ? String(error.message) : String(error)
@@ -196,11 +198,19 @@ export function apply(ctx, config) {
   }
 
   ctx.on('system-prompt/assemble', async (_assembly, context, next) => {
-    const assembled = await next()
     const agent = context.agent
-    if (agent === undefined) return assembled
+    if (agent === undefined) return next()
     const session = agent.session
     agents.set(session.id, agent)
+
+    // Promote BEFORE next() so this assembly's wireSchemas already collapse
+    // to run_code. Calling presentAs after next() cannot rewrite assembled.tools.
+    const alreadyCalledTool = sessionEvents(session).some((event) => event.type === 'tool/call')
+    if (alreadyCalledTool && routerMode === 'standard' && promoteTo === 'ptc') {
+      promoteToPtc(agent, session)
+    }
+
+    const assembled = await next()
 
     // issue #3 fix: the first assembly happens before the first user/message
     // event lands in session.events, so sessionMode() saw an empty transcript
@@ -235,37 +245,33 @@ export function apply(ctx, config) {
     }
 
     // After promotion the system prompt keeps the SAME short shape as the
-    // first turn (router persona + voice). The generated `tools:code-only`
-    // and `tools:sdk` sections stay registered by `presentAs('code')`, but
+    // first turn (router persona + voice). The generated `tools:ptc-only`
+    // and `tools:sdk` sections stay registered by `presentAs('ptc')`, but
     // their ~33K text is delivered once as a durable inbox message instead of
     // being rendered into `system` every request — that long system was the
     // thing flipping DeepSeek to the preview-style "Let me..." reasoning.
-    const codeSections = (assembled.sections || []).filter(
-      (section) => section.name === 'tools:code-only' || section.name === 'tools:sdk',
-    )
+    const codeSections = (assembled.sections || []).filter((section) => (
+      section.name === 'tools:ptc-only'
+      || section.name === 'tools:code-only'
+      || section.name === 'tools:sdk'
+    ))
 
-    if (codeModeAgents.has(agent)) {
-      // Normal path: the SDK message was injected on the first tool/call,
-      // before this assembly, so the system prompt stays short.
-      if (sdkInConversation(session)) {
-        return { ...assembled, sections, contexts: [] }
-      }
-      // Rare fallback (e.g. promotion happened during this same assembly):
-      // keep the SDK in the system for this one request; the injected inbox
-      // message takes over from the next request.
-      return { ...assembled, sections: [...sections, ...codeSections], contexts: [] }
-    }
-
-    if (sessionEvents(session).some((event) => event.type === 'tool/call')) {
-      if (routerMode === 'standard' && promoteTo === 'ptc') {
-        promoteToPtc(agent, session)
-        if (codeModeAgents.has(agent)) {
-          return sdkInConversation(session)
-            ? { ...assembled, sections, contexts: [] }
-            : { ...assembled, sections: [...sections, ...codeSections], contexts: [] }
+    if (alreadyCalledTool) {
+      if (codeModeAgents.has(agent)) {
+        const tools = (assembled.tools || []).some((tool) => tool.name === 'run_code')
+          ? assembled.tools.filter((tool) => tool.name === 'run_code')
+          : assembled.tools
+        // Normal path: the SDK message was injected on the first tool/call,
+        // before this assembly, so the system prompt stays short.
+        if (sdkInConversation(session)) {
+          return { ...assembled, sections, contexts: [], tools }
         }
+        // Rare fallback (e.g. promotion happened during this same assembly):
+        // keep the SDK in the system for this one request; the injected inbox
+        // message takes over from the next request.
+        return { ...assembled, sections: [...sections, ...codeSections], contexts: [], tools }
       }
-      return { ...assembled, sections, contexts: [] } // promoted: PTC/run_code (standard) / full catalog (spec)
+      return { ...assembled, sections, contexts: [] } // promoted: full catalog (standard) / spec
     }
 
     const available = new Set(assembled.tools.map((tool) => tool.name))
