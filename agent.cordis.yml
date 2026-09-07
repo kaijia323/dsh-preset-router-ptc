@@ -16,13 +16,14 @@
 #   - routerMode: standard (default) restores the RL interface: the first
 #     request carries ONLY the RL training sentence + shell/str_replace_editor
 #     and the model works in think-act feedback loops. After the first durable
-#     tool/call the session is promoted to the PTC/run_code (Code Mode)
-#     presentation instead of the full Standard catalog. The system prompt
-#     keeps the first-turn RL persona and appends only the Code Mode sections
-#     (`tools:ptc-only` + `tools:sdk`) — NOT the full sections — so the
-#     reasoning voice stays the standard one ("Let's/We need"), not the
-#     preview-style "Let me". The mode derives from durable session events, so
-#     resume/reload keeps it.
+#     tool/call the session calls `agent.ctx.tools.presentAs('ptc')` — the
+#     same API official PTC presets declare at mount via
+#     `@deepseek-ai/dsh-agent-tool-presentation` — instead of opening the
+#     full Standard catalog. We delay that declaration so the first request
+#     keeps the RL native surface. The system prompt keeps the first-turn RL
+#     persona; `tools:ptc-only` + `tools:sdk` are delivered once as an inbox
+#     message. The mode derives from durable session events, so resume/reload
+#     keeps it.
 #   - weak band: every real user message gets ONE fixed near-field guidance
 #     message appended right after it (cache-neutral), depth-adaptive:
 #     simple tasks get the fast-convergence guide, complex tasks the
@@ -71,10 +72,12 @@
 
 # Task-aware reasoning-mode router: classifies the first user message and
 # injects the matching persona + first-turn core tool set; after the first
-# durable tool/call, promotes the session to the PTC/run_code (Code Mode)
-# presentation instead of the full native Standard catalog, keeping the RL
-# persona and only appending the Code Mode sections (`tools:ptc-only` +
-# `tools:sdk`).
+# durable tool/call, declares `presentAs('ptc')` on this agent (DSH 0.1.2+
+# PTC presentation: reserved `run_code` transport + generated SDK) instead
+# of opening the full native Standard catalog. Official PTC presets put
+# `@deepseek-ai/dsh-agent-tool-presentation` on the standing mount so every
+# request is already `run_code`; this row is omitted on purpose so the
+# first request can stay RL-native (shell + str_replace_editor).
 #
 # routerMode (v0.2.0 naming):
 #   standard (default) — RL interface restoration: the first request carries
@@ -296,6 +299,9 @@
 
     - id: tool-workflow
       name: '@deepseek-ai/dsh-tool-workflow'
+      # Keep the engine above for `ralph`, but do not publish a second
+      # model-authored orchestration surface beside `run_code` in PTC mode.
+      disabled: true
 
     - id: tool-ralph
       name: '@deepseek-ai/dsh-tool-ralph'
@@ -320,3 +326,16 @@
   config:
     fetch: false
     searchTimeoutMs: 60000
+
+# ── presentation ────────────────────────────────────────────────────────────
+#
+# Official `ptc` preset (DSH 0.1.2-rc.1) carries this row with `mode: ptc` so
+# the standing mount is PTC from the first request. Do NOT add it here: one
+# composition selects one presentation, and a standing `ptc` declaration would
+# collapse the first-turn RL catalog to `run_code` (filtering to
+# shell/str_replace_editor would then yield an empty tool list).
+# `router-bootstrap` waits for host `codeRuntime` then calls
+# `agent.ctx.tools.presentAs('ptc')` after the first durable tool/call — the
+# same API, scoped to this session. `run_code` is a reserved transport, not a
+# registered tool; `presentAs('code')` is not a ToolPresentationMode and DSH
+# treats it like `both` (SDK text + native grep/glob/read still callable).

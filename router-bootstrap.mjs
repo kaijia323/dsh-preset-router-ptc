@@ -8,10 +8,12 @@
  * Reads the session's first user message, classifies the task into a
  * continuous mode in [0,1] (0 = spec plan-first, 1 = react doer), and on the
  * first model request injects the matching persona and first-turn core tool
- * set. After the first durable tool/call the session is promoted to the
- * PTC/run_code presentation (Code Mode) by default, not the full native
- * Standard catalog; `promoteTo: standard` restores the old promotion. The
- * mode derives from durable session events, so resume/reload keeps it.
+ * set. After the first durable tool/call the session is promoted with
+ * `agent.ctx.tools.presentAs('ptc')` — the same API official PTC presets
+ * declare at mount via `@deepseek-ai/dsh-agent-tool-presentation`. We delay
+ * that declaration so the first request keeps the RL native surface.
+ * `promoteTo: standard` restores the old full-catalog promotion. The mode
+ * derives from durable session events, so resume/reload keeps it.
  *
  * The agent can read and tune its own routing through `dev_router_status` and
  * `dev_router_mode` (self-optimization loop) — mode accepts band names
@@ -82,6 +84,10 @@ export function apply(ctx, config) {
   // to the PTC/run_code (Code Mode) presentation; `standard` keeps the old
   // full native Standard catalog.
   const promoteTo = config.promoteTo === 'standard' ? 'standard' : 'ptc'
+  // DSH 0.1.2+ ToolPresentationMode is native|ptc|both. `'code'` is not a
+  // mode: presentAs writes it onto the layer anyway, wireSchemas then takes
+  // the non-native/non-ptc branch (`both`) — SDK text is generated, native
+  // grep/glob/read stay callable. That is the session we just saw.
   const RL_PERSONA = 'You are a helpful software engineer assistant.'
   // PTC/run_code sessions reason about writing a program, which DeepSeek
   // otherwise tends to open with first-person singular "Let me ..." (the
@@ -123,6 +129,26 @@ export function apply(ctx, config) {
     })
     if (found) sdkInjectedSessions.add(session.id)
     return found
+  }
+
+  /**
+   * Live `run_code` wire schema for this agent. `system-prompt/assemble`
+   * builds `assembly.tools` BEFORE the waterfall, so `presentAs('ptc')`
+   * inside the listener cannot rewrite `assembled.tools`. After promotion
+   * we re-read the registry: `schemas(agent)` includes the reserved
+   * `run_code` transport once mode is `ptc`. Never fall back to the native
+   * catalog — that is how grep/glob/read kept running after "promotion".
+   */
+  function liveRunCodeTools(agent, assembled) {
+    const listed = (assembled.tools || []).filter((tool) => tool.name === 'run_code')
+    if (listed.length) return listed
+    try {
+      const schemas = agent.ctx.tools.schemas?.(agent)
+      return (schemas || []).filter((tool) => tool.name === 'run_code')
+    } catch (error) {
+      ctx.logger?.warn?.(`${name}: could not read run_code schema for session ${agent.session?.id}`, error)
+      return []
+    }
   }
 
   /**
@@ -170,24 +196,22 @@ export function apply(ctx, config) {
   }
 
   /**
-   * Promote one agent to PTC/run_code presentation (`presentAs('ptc')`) after
-   * its first durable tool/call. DSH ToolPresentationMode is native|ptc|both;
-   * `'code'` is not a mode and would leave the native catalog in place while
-   * still registering `tools:sdk`. The switch is per agent: it uses
-   * `agent.ctx` so only this session's model-facing tool list collapses to
-   * the generated SDK's `run_code` entry point.
+   * Declare PTC presentation on this agent the same way
+   * `@deepseek-ai/dsh-agent-tool-presentation` does: wait for `codeRuntime`,
+   * then `presentAs('ptc')` on a scoped context. Official presets do that at
+   * standing-mount time (every request is `run_code`). We do it on `agent.ctx`
+   * after the first durable tool/call so the first request stays RL-native.
+   *
+   * Only a conflict with `"ptc"` is success (HMR re-declare). A conflict with
+   * `"native"` means this scope already chose a presentation and cannot switch.
    */
-  function promoteToPtc(agent, session) {
-    if (codeModeAgents.has(agent)) return
+  function declarePtc(scopedCtx, agent, session) {
     try {
-      agent.ctx.tools.presentAs('ptc')
+      scopedCtx.tools.presentAs('ptc')
       codeModeAgents.add(agent)
     } catch (error) {
       const message = error && error.message ? String(error.message) : String(error)
-      // Another presenter already put this agent into code mode (e.g. the
-      // router plugin was HMR-reloaded while the agent's presentation stayed).
-      // Treat that as success rather than retrying forever.
-      if (/conflicts with|already declared|one composition selects one presentation/i.test(message)) {
+      if (/conflicts with "ptc"/i.test(message)) {
         codeModeAgents.add(agent)
       } else {
         ctx.logger?.warn?.(`${name}: could not switch session ${session.id} to PTC/run_code presentation`, error)
@@ -197,14 +221,38 @@ export function apply(ctx, config) {
     injectSdkMessage(agent, session)
   }
 
+  function promoteToPtc(agent, session) {
+    if (codeModeAgents.has(agent)) {
+      injectSdkMessage(agent, session)
+      return
+    }
+    const scoped = agent.ctx
+    if (scoped.get?.('codeRuntime') || ctx.get?.('codeRuntime')) {
+      declarePtc(scoped, agent, session)
+      return
+    }
+    if (typeof scoped.inject !== 'function') {
+      declarePtc(scoped, agent, session)
+      return
+    }
+    scoped.inject(['codeRuntime'], (runtimeCtx) => {
+      if (codeModeAgents.has(agent)) {
+        injectSdkMessage(agent, session)
+        return
+      }
+      declarePtc(runtimeCtx, agent, session)
+    })
+  }
+
   ctx.on('system-prompt/assemble', async (_assembly, context, next) => {
     const agent = context.agent
     if (agent === undefined) return next()
     const session = agent.session
     agents.set(session.id, agent)
 
-    // Promote BEFORE next() so this assembly's wireSchemas already collapse
-    // to run_code. Calling presentAs after next() cannot rewrite assembled.tools.
+    // presentAs is an effect on the agent scope; it does NOT rebuild this
+    // assembly (tools are collected before the waterfall). Promote anyway so
+    // the live registry collapses, then re-read run_code via schemas().
     const alreadyCalledTool = sessionEvents(session).some((event) => event.type === 'tool/call')
     if (alreadyCalledTool && routerMode === 'standard' && promoteTo === 'ptc') {
       promoteToPtc(agent, session)
@@ -257,19 +305,18 @@ export function apply(ctx, config) {
     ))
 
     if (alreadyCalledTool) {
-      if (codeModeAgents.has(agent)) {
-        const tools = (assembled.tools || []).some((tool) => tool.name === 'run_code')
-          ? assembled.tools.filter((tool) => tool.name === 'run_code')
-          : assembled.tools
-        // Normal path: the SDK message was injected on the first tool/call,
-        // before this assembly, so the system prompt stays short.
-        if (sdkInConversation(session)) {
-          return { ...assembled, sections, contexts: [], tools }
+      if (routerMode === 'standard' && promoteTo === 'ptc') {
+        const tools = liveRunCodeTools(agent, assembled)
+        if (tools.length) {
+          if (sdkInConversation(session)) {
+            return { ...assembled, sections, contexts: [], tools }
+          }
+          return { ...assembled, sections: [...sections, ...codeSections], contexts: [], tools }
         }
-        // Rare fallback (e.g. promotion happened during this same assembly):
-        // keep the SDK in the system for this one request; the injected inbox
-        // message takes over from the next request.
-        return { ...assembled, sections: [...sections, ...codeSections], contexts: [], tools }
+        if (codeModeAgents.has(agent)) {
+          ctx.logger?.warn?.(`${name}: session ${session.id} declared ptc but run_code is not in the wire catalog`)
+          return { ...assembled, sections, contexts: [], tools: [] }
+        }
       }
       return { ...assembled, sections, contexts: [] } // promoted: full catalog (standard) / spec
     }
